@@ -1,0 +1,24 @@
+# Local portfolio data and uploaded financial statements
+portfolio.db
+db.sqlite3
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.pdf
+*.csv
+!tests/dummy_zerodha.csv
+/portfolio.zip
+/test.txt
+/app_backup.py
+/db_backup.py
+
+# Local runtime/build artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+frontend/node_modules/
+frontend/dist/
+.env
+.env.*
+!.env.example
