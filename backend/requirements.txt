@@ -3,3 +3,4 @@ uvicorn
 python-multipart
 pypdf
 pdfplumber
+python-dotenv

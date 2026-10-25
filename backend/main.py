@@ -1,6 +1,7 @@
 """FastAPI backend for portfolio tracker."""
 
 import shutil
+import os
 import sys
 import tempfile
 from datetime import date
@@ -8,9 +9,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Query
+from fastapi import Request
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
+import hmac
+
+from backend.auth import create_session, verify_session
 
 from db import (
     get_connection,
@@ -39,21 +50,57 @@ PARSERS = {
 
 app = FastAPI(title="Portfolio Tracker API")
 
+# Keep the API private while leaving the static login page available.
+@app.middleware("http")
+async def require_owner(request: Request, call_next):
+    path = request.url.path
+    if not path.startswith("/api/") or path in {"/api/health", "/api/auth/login", "/api/auth/session"}:
+        return await call_next(request)
+    if not os.getenv("APP_LOGIN_KEY"):
+        return JSONResponse({"detail": "Set APP_LOGIN_KEY in the backend .env file."}, status_code=503)
+    authorization = request.headers.get("authorization", "")
+    token = authorization[7:] if authorization.startswith("Bearer ") else None
+    if not verify_session(token):
+        return JSONResponse({"detail": "Sign in required"}, status_code=401)
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[origin.strip() for origin in os.getenv("APP_ALLOWED_ORIGINS", "").split(",") if origin.strip()],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
-DB_PATH = Path(__file__).resolve().parents[1] / "portfolio.db"
+DB_PATH = Path(os.getenv("PORTFOLIO_DB_PATH", Path(__file__).resolve().parents[1] / "portfolio.db"))
 
 
 def get_conn():
     conn = get_connection(DB_PATH)
     init_db(conn)
     return conn
+
+
+class LoginCredentials(BaseModel):
+    key: str
+
+
+@app.post("/api/auth/login")
+def login(credentials: LoginCredentials):
+    allowed_key = os.getenv("APP_LOGIN_KEY", "")
+    if not allowed_key:
+        raise HTTPException(status_code=503, detail="Set APP_LOGIN_KEY in the backend .env file.")
+    if not hmac.compare_digest(credentials.key, allowed_key):
+        raise HTTPException(status_code=401, detail="That access key is incorrect.")
+    return {"authenticated": True, "token": create_session()}
+
+
+@app.get("/api/auth/session")
+def session_status(request: Request):
+    authorization = request.headers.get("authorization", "")
+    token = authorization[7:] if authorization.startswith("Bearer ") else None
+    return {"authenticated": bool(verify_session(token))}
 
 
 @app.get("/api/brokers")
@@ -507,3 +554,18 @@ async def upload_holdings(
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/{asset_path:path}")
+def frontend(asset_path: str):
+    if asset_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="Not found")
+    dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+    root = dist.resolve()
+    requested = (dist / asset_path).resolve()
+    if requested.is_relative_to(root) and requested.is_file():
+        return FileResponse(requested)
+    index = dist / "index.html"
+    if index.is_file():
+        return FileResponse(index)
+    raise HTTPException(status_code=404, detail="Frontend is not built. Run npm --prefix frontend run build.")

@@ -11,6 +11,8 @@ import EmptyState from "./components/EmptyState";
 import Toast from "./components/Toast";
 import EpfPage from "./components/EpfPage";
 import IbkrPage from "./components/IbkrPage";
+import Login from "./components/Login";
+import { checkSession, getSession, signOut } from "./auth";
 
 export default function App() {
   const [data, setData] = useState(null);
@@ -22,12 +24,56 @@ export default function App() {
   const [page, setPage] = useState("portfolio");
   const [epfRefreshKey, setEpfRefreshKey] = useState(0);
   const [ibkrRefreshKey, setIbkrRefreshKey] = useState(0);
+  const [session, setSession] = useState(() => getSession());
 
   const insights = useMemo(() => buildInsights(data), [data]);
 
   useEffect(() => {
-    loadInitial();
+    let active = true;
+    async function initialize() {
+      const saved = getSession();
+      if (saved?.guest) {
+        if (active) setSession(saved);
+        await loadInitial();
+        return;
+      }
+      const validSession = await checkSession();
+      if (!active) return;
+      if (validSession) {
+        setSession(validSession);
+        await loadInitial();
+      } else {
+        signOut();
+        setSession(null);
+        setLoading(false);
+      }
+    }
+    initialize();
+    return () => { active = false; };
   }, []);
+
+  async function handleSignedIn(nextSession) {
+    setSession(nextSession);
+    setLoading(true);
+    setError(null);
+    await loadInitial();
+  }
+
+  function handleSignOut() {
+    signOut();
+    setSession(null);
+    setData(null);
+    setSnapshots([]);
+    setPage("portfolio");
+  }
+
+  const requestUpload = () => {
+    if (session?.guest) {
+      window.__addToast?.("Sign in to upload your own statements", "error");
+      return;
+    }
+    setUploadOpen(true);
+  };
 
   async function loadInitial() {
     try {
@@ -79,6 +125,8 @@ export default function App() {
     );
   }
 
+  if (!session) return <Login onSignedIn={handleSignedIn} />;
+
   return (
     <div className="min-h-screen text-ink-900 pb-16">
       <Toast />
@@ -99,6 +147,7 @@ export default function App() {
             {[{ label: "Portfolio", id: "portfolio" }, { label: "EPF", id: "epf" }, { label: "IBKR", id: "ibkr" }].map(({ label, id }) => <button key={id} type="button" onClick={() => setPage(id)} className={`rounded-lg px-3 py-2 text-sm font-medium transition ${page === id ? "bg-mist-100 text-ink-950" : "text-ink-500 hover:text-ink-900"}`}>{label}</button>)}
           </nav>
           <div className="flex items-center gap-2 sm:gap-3">
+            <span className={`hidden md:inline rounded-full px-3 py-1 text-xs font-semibold ${session.guest ? "bg-celadon-50 text-celadon-700" : "bg-mist-100 text-ink-600"}`}>{session.guest ? "Guest · sample data" : session.username}</span>
             <button
               type="button"
               onClick={refresh}
@@ -109,7 +158,9 @@ export default function App() {
             </button>
             <button
               type="button"
-              onClick={() => setUploadOpen(true)}
+              onClick={requestUpload}
+              disabled={session.guest}
+              title={session.guest ? "Uploads are available after signing in" : "Upload a statement"}
               className="inline-flex items-center gap-2 rounded-xl bg-ink-900 hover:bg-ink-800 text-white text-sm font-semibold px-3.5 sm:px-4 py-2.5 transition"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -117,12 +168,15 @@ export default function App() {
               </svg>
               <span className="hidden xs:inline sm:inline">Upload</span>
             </button>
+            <button type="button" onClick={handleSignOut} className="rounded-lg px-2 py-2 text-sm font-medium text-ink-500 hover:text-ink-900">Sign out</button>
           </div>
         </div>
       </header>
 
+      {session.guest && <div className="border-b border-celadon-100 bg-celadon-50/80 px-4 py-2 text-center text-xs font-medium text-celadon-700">You’re exploring sample data. No real portfolio information is loaded in guest mode.</div>}
+
       <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 space-y-6">
-        {page === "epf" ? <EpfPage onUpload={() => setUploadOpen(true)} refreshKey={epfRefreshKey} /> : page === "ibkr" ? <IbkrPage refreshKey={ibkrRefreshKey} /> : <>
+        {page === "epf" ? <EpfPage onUpload={requestUpload} refreshKey={epfRefreshKey} /> : page === "ibkr" ? <IbkrPage refreshKey={ibkrRefreshKey} /> : <>
         {error && (
           <div className="rounded-2xl border border-coral-100 bg-coral-50 px-4 py-3 text-sm text-coral-700">
             {error}
@@ -142,8 +196,8 @@ export default function App() {
         )}
 
         {snapshots.length > 0 && (
-          <p className="text-center text-xs text-ink-300 pt-4">
-            {snapshots.length === 1 ? "1 snapshot" : `${snapshots.length} snapshots`} stored locally · native amounts by currency; portfolio totals in INR equivalent
+              <p className="text-center text-xs text-ink-300 pt-4">
+              {session.guest ? "Fictional sample portfolio · native amounts by currency; totals in INR equivalent" : `${snapshots.length === 1 ? "1 snapshot" : `${snapshots.length} snapshots`} stored locally · native amounts by currency; portfolio totals in INR equivalent`}
           </p>
         )}
         </>}
